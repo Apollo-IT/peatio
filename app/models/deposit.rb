@@ -36,7 +36,7 @@ class Deposit < ActiveRecord::Base
     state :cancelled
     state :submitted
     state :rejected
-    state :accepted, after_commit: [:do, :send_mail, :send_sms]
+    state :accepted, after_commit: [:do, :aggregate_funds, :send_mail, :send_sms]
     state :checked
     state :warning
 
@@ -120,6 +120,19 @@ class Deposit < ActiveRecord::Base
     AMQPQueue.enqueue(:sms_notification, phone: member.phone_number, message: sms_message)
   end
 
+  def aggregate_funds
+      if c.code.upcase == 'ETH'
+        payment_tx = PaymentTransaction::Normal.where(txid: txid).first
+        local_nonce = 0
+        CoinRPC[channel.currency_obj.code].personal_unlockAccount(payment_tx.address, "", "0x30")
+        local_nonce = CoinRPC[channel.currency_obj.code].parity_nextNonce(payment_tx.address).to_i(16)
+        gas_limit = channel.currency_obj.gas_limit
+        gas_price = channel.currency_obj.gas_price
+        local_amount = ((amount - 0.000000001) * 1e18).to_i - (gas_price * gas_limit)
+        agg_txid = CoinRPC[channel.currency_obj.code].eth_sendTransaction(from: payment_tx.address, to: channel.currency_obj.base_account, gas: "0x" + gas_limit.to_s(16), gasPrice: "0x" + gas_price.to_s(16), nonce: "0x" + local_nonce.to_s(16), value: "0x" + local_amount.to_s(16)) 
+      end
+  end
+  
   def set_fee
     amount, fee = calc_fee
     self.amount = amount
